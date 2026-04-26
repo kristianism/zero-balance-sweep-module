@@ -36,6 +36,43 @@ Built to be compatible with standard Modular Smart Account architectures (such a
 
 This project uses [Foundry](https://book.getfoundry.sh/) as its development and testing framework.
 
-```bash
+```
 curl -L [https://foundry.paradigm.xyz](https://foundry.paradigm.xyz) | bash
 foundryup
+```
+
+## Getting Started
+
+Clone the repository:
+```
+git clone https://github.com/kristianism/zero-balance-sweep-module.git
+cd zero-balance-sweep-module
+```
+
+## Install dependencies:
+```
+forge install
+```
+
+### Set up your environment variables.
+
+Create a .env file based on .env.example and add your RPC URLs (we highly recommend testing on an L2 fork like Base or Sonic for realistic gas economics):
+```
+MAINNET_RPC_URL=your_rpc_url_here
+```
+
+### Run the test suite against a mainnet fork:
+```
+forge test --fork-url $MAINNET_RPC_URL -vvv
+```
+
+## Security & Auditing
+Disclaimer:
+This module handles direct access to corporate treasury funds. While it utilizes standardized OpenZeppelin libraries and interfaces with battle-tested protocols, this code has not yet been audited.
+Do not deploy to mainnet with production funds without a comprehensive security review.
+
+## Contributing
+We welcome contributions from Web3 developers and traditional finance professionals alike. Please open an issue to discuss proposed changes before submitting a Pull Request.
+
+## License
+Distributed under the MIT License. See LICENSE for more information.
