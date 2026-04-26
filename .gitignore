@@ -1,0 +1,16 @@
+# Foundry build artifacts
+out/
+cache/
+broadcast/
+
+# Dependencies (managed via `forge install` git submodules)
+lib/
+
+# Environment
+.env
+.env.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

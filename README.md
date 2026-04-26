@@ -51,7 +51,8 @@ cd zero-balance-sweep-module
 
 ## Install dependencies:
 ```
-forge install
+forge install foundry-rs/forge-std --no-commit
+forge install OpenZeppelin/openzeppelin-contracts --no-commit
 ```
 
 ### Set up your environment variables.
@@ -63,8 +64,38 @@ MAINNET_RPC_URL=your_rpc_url_here
 
 ### Run the test suite against a mainnet fork:
 ```
+source .env
 forge test --fork-url $MAINNET_RPC_URL -vvv
 ```
+
+## Project Layout
+
+```
+src/
+  SafeCorporateSweepModule.sol         # Main module implementation
+  interfaces/
+    ISafe.sol                          # Minimal Gnosis Safe surface
+    IAaveV3Pool.sol                    # Aave V3 Pool + aToken interfaces
+    ISafeCorporateSweepModule.sol      # Public module interface (events, errors, externals)
+test/
+  SafeCorporateSweepModule.t.sol       # Mainnet-fork tests against real Aave V3 liquidity
+  mocks/
+    MockSafe.sol                       # Minimal Safe stand-in for unit testing
+script/
+  Deploy.s.sol                         # Foundry deploy script
+```
+
+## Mainnet Wiring (Ethereum)
+
+| Component | Address |
+| --- | --- |
+| USDC | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` |
+| aUSDC (Aave V3) | `0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c` |
+| Aave V3 Pool | `0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2` |
+
+After deploying the module, the Safe owners must sign a transaction calling
+`enableModule(moduleAddress)` on the Safe before any sweep / JIT entrypoint
+can route funds.
 
 ## Security & Auditing
 Disclaimer:
