@@ -61,6 +61,20 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     /// @notice Authorized automation relayers (e.g. Gelato dedicated msg.sender).
     mapping(address => bool) private _relayers;
 
+    /// @inheritdoc ISafeCorporateSweepModule
+    uint256 public maxJitWithdrawPerCall;
+    /// @inheritdoc ISafeCorporateSweepModule
+    uint256 public maxSweepPerCall;
+    /// @inheritdoc ISafeCorporateSweepModule
+    uint256 public relayerCooldown;
+    /// @inheritdoc ISafeCorporateSweepModule
+    uint256 public lastRelayerActionAt;
+
+    uint256 private _jitIntentNonce;
+    uint256 private _jitIntentAmount;
+    uint256 private _jitIntentDeadline;
+    bool private _jitIntentActive;
+
     // -----------------------------------------------------------------
     // Modifiers
     // -----------------------------------------------------------------
@@ -142,6 +156,35 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
+    function setJitIntent(uint256 _amount, uint256 _deadline) external onlySafe {
+        if (_amount == 0) revert ZeroAmount();
+        if (_deadline < block.timestamp) revert JitIntentExpired();
+
+        unchecked {
+            // safe: monotonic uint256 counter for realistic module lifetime.
+            _jitIntentNonce++;
+        }
+        _jitIntentAmount = _amount;
+        _jitIntentDeadline = _deadline;
+        _jitIntentActive = true;
+
+        emit JitIntentSet(_jitIntentNonce, _amount, _deadline);
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function setRelayerGuardrails(
+        uint256 _maxJitWithdrawPerCall,
+        uint256 _maxSweepPerCall,
+        uint256 _relayerCooldown
+    ) external onlySafe {
+        maxJitWithdrawPerCall = _maxJitWithdrawPerCall;
+        maxSweepPerCall = _maxSweepPerCall;
+        relayerCooldown = _relayerCooldown;
+
+        emit RelayerGuardrailsUpdated(_maxJitWithdrawPerCall, _maxSweepPerCall, _relayerCooldown);
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
     function manualSupply(uint256 _amount) external onlySafe nonReentrant {
         if (_amount == 0) revert ZeroAmount();
         _supplyToAave(_amount);
@@ -170,9 +213,16 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
             supplied = balance - threshold;
         }
 
+        bool relayerCall = msg.sender != safeAddress;
+        if (relayerCall) {
+            _enforceRelayerGuardrails(supplied, true);
+        }
+
         _supplyToAave(supplied);
 
-        emit Swept(msg.sender, supplied, threshold);
+        if (relayerCall) _markRelayerAction();
+
+        emit Swept(msg.sender, supplied, IERC20(asset).balanceOf(safeAddress));
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
@@ -192,8 +242,23 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
             shortfall = _txAmount - balance;
         }
 
-        _withdrawFromAave(shortfall);
+        bool relayerCall = msg.sender != safeAddress;
+        if (relayerCall) {
+            _enforcePendingJitIntent(_txAmount);
+            _enforceRelayerGuardrails(shortfall, false);
+        }
 
+        uint256 beforeWithdraw = balance;
+        _withdrawFromAave(shortfall);
+        uint256 afterWithdraw = IERC20(asset).balanceOf(safeAddress);
+        if (afterWithdraw < _txAmount) revert InsufficientPostWithdrawBalance();
+
+        if (relayerCall) {
+            _jitIntentActive = false;
+            _markRelayerAction();
+        }
+
+        shortfall = afterWithdraw - beforeWithdraw;
         emit JitWithdrawn(msg.sender, shortfall, _txAmount);
     }
 
@@ -204,6 +269,26 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     /// @inheritdoc ISafeCorporateSweepModule
     function isRelayer(address account) external view returns (bool) {
         return _relayers[account];
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function jitIntentNonce() external view returns (uint256) {
+        return _jitIntentNonce;
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function jitIntentAmount() external view returns (uint256) {
+        return _jitIntentAmount;
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function jitIntentDeadline() external view returns (uint256) {
+        return _jitIntentDeadline;
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function hasPendingJitIntent() external view returns (bool) {
+        return _jitIntentActive;
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
@@ -262,5 +347,31 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     function _execFromModule(address to, uint256 value, bytes memory data) internal {
         bool success = ISafe(safeAddress).execTransactionFromModule(to, value, data, Enum.Operation.Call);
         if (!success) revert SafeCallReverted();
+    }
+
+    function _enforceRelayerGuardrails(uint256 amount, bool isSweep) internal view {
+        uint256 lastAction = lastRelayerActionAt;
+        uint256 cooldown = relayerCooldown;
+        if (cooldown != 0 && block.timestamp < lastAction + cooldown) {
+            revert RelayerCooldownActive();
+        }
+
+        if (isSweep) {
+            uint256 cap = maxSweepPerCall;
+            if (cap != 0 && amount > cap) revert SweepCapExceeded();
+        } else {
+            uint256 cap = maxJitWithdrawPerCall;
+            if (cap != 0 && amount > cap) revert JitCapExceeded();
+        }
+    }
+
+    function _markRelayerAction() internal {
+        lastRelayerActionAt = block.timestamp;
+    }
+
+    function _enforcePendingJitIntent(uint256 txAmount) internal view {
+        if (!_jitIntentActive) revert NoPendingJitIntent();
+        if (block.timestamp > _jitIntentDeadline) revert JitIntentExpired();
+        if (_jitIntentAmount != txAmount) revert JitIntentAmountMismatch();
     }
 }

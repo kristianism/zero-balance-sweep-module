@@ -28,8 +28,10 @@ The **Zero-Balance Sweep Module** operates as a non-custodial gatekeeper for you
 Built to be compatible with standard Modular Smart Account architectures (such as Safe Modules / ERC-6900 plugins), the module guarantees that core wallet security remains intact while adding programmable financial workflows.
 
 * `setThreshold(uint256 _amount)`: Configures the target daily operating liquidity.
-* `executeSweep()`: Permissionless trigger (callable via Gelato or manual execution) to push excess capital to the yield target.
-* `preTransactionHook(uint256 _txAmount)`: The JIT withdrawal logic that prevents failed OpEx transactions.
+* `executeSweep()`: Authorized relayer/Safe trigger to push excess capital to the yield target.
+* `setJitIntent(uint256 _amount, uint256 _deadline)`: Safe-signed one-time intent required before relayer JIT execution.
+* `jitWithdraw(uint256 _txAmount)`: JIT withdrawal logic that enforces the pending intent and funding post-condition.
+* `setRelayerGuardrails(...)`: Safe-controlled per-call caps and cooldown for relayer automation.
 * `manualSupply(uint256 _amount)` & `manualWithdraw(uint256 _amount)`: Admin-only overrides for proactive cash flow management.
 
 ## Prerequisites

@@ -141,6 +141,9 @@ contract SafeCorporateSweepModuleTest is Test {
         vm.expectEmit(true, false, false, true, address(module));
         emit ISafeCorporateSweepModule.JitWithdrawn(relayer, expectedPull, outgoingTx);
 
+        vm.prank(address(safe));
+        module.setJitIntent(outgoingTx, block.timestamp + 1 hours);
+
         vm.prank(relayer);
         uint256 pulled = module.jitWithdraw(outgoingTx);
 
@@ -152,6 +155,27 @@ contract SafeCorporateSweepModuleTest is Test {
         vm.prank(relayer);
         vm.expectRevert(ISafeCorporateSweepModule.NoShortfall.selector);
         module.jitWithdraw(THRESHOLD); // Safe holds way more than this
+    }
+
+    function test_JitWithdraw_RelayerRequiresIntent() public {
+        vm.prank(relayer);
+        module.executeSweep();
+
+        vm.prank(relayer);
+        vm.expectRevert(ISafeCorporateSweepModule.NoPendingJitIntent.selector);
+        module.jitWithdraw(80_000e6);
+    }
+
+    function test_JitWithdraw_RevertsOnIntentAmountMismatch() public {
+        vm.prank(relayer);
+        module.executeSweep();
+
+        vm.prank(address(safe));
+        module.setJitIntent(81_000e6, block.timestamp + 1 hours);
+
+        vm.prank(relayer);
+        vm.expectRevert(ISafeCorporateSweepModule.JitIntentAmountMismatch.selector);
+        module.jitWithdraw(80_000e6);
     }
 
     // -----------------------------------------------------------------
@@ -207,6 +231,36 @@ contract SafeCorporateSweepModuleTest is Test {
         deal(USDC, address(safe), SAFE_FUNDING);
         vm.prank(newBot);
         vm.expectRevert(ISafeCorporateSweepModule.NotAuthorizedRelayer.selector);
+        module.executeSweep();
+    }
+
+    function test_SetJitIntent_OnlySafe() public {
+        vm.prank(stranger);
+        vm.expectRevert(ISafeCorporateSweepModule.NotSafe.selector);
+        module.setJitIntent(1e6, block.timestamp + 1 hours);
+
+        vm.prank(address(safe));
+        module.setJitIntent(50_000e6, block.timestamp + 1 hours);
+        assertTrue(module.hasPendingJitIntent());
+        assertEq(module.jitIntentAmount(), 50_000e6);
+    }
+
+    function test_RelayerGuardrails_CooldownAndCaps() public {
+        vm.prank(address(safe));
+        module.setRelayerGuardrails(40_000e6, 120_000e6, 600); // 10 min cooldown
+
+        vm.prank(relayer);
+        vm.expectRevert(ISafeCorporateSweepModule.SweepCapExceeded.selector);
+        module.executeSweep(); // default sweep is 150k
+
+        vm.prank(address(safe));
+        module.setRelayerGuardrails(40_000e6, 200_000e6, 600);
+
+        vm.prank(relayer);
+        module.executeSweep();
+
+        vm.prank(relayer);
+        vm.expectRevert(ISafeCorporateSweepModule.RelayerCooldownActive.selector);
         module.executeSweep();
     }
 

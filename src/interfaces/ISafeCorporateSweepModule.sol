@@ -28,9 +28,15 @@ interface ISafeCorporateSweepModule {
 
     /// @notice Emitted when JIT funding tops up the Safe ahead of an outgoing transaction.
     /// @param  caller     Address that triggered the JIT pull.
-    /// @param  shortfall  Exact amount drawn from Aave back into the Safe.
+    /// @param  shortfall  Amount drawn from Aave back into the Safe.
     /// @param  txAmount   Outgoing transaction size the JIT was sized for.
     event JitWithdrawn(address indexed caller, uint256 shortfall, uint256 txAmount);
+
+    /// @notice Emitted when the Safe sets a relayer-consumable JIT intent.
+    event JitIntentSet(uint256 indexed nonce, uint256 amount, uint256 deadline);
+
+    /// @notice Emitted when relayer guardrails are updated.
+    event RelayerGuardrailsUpdated(uint256 maxJitWithdrawPerCall, uint256 maxSweepPerCall, uint256 relayerCooldown);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -45,6 +51,13 @@ interface ISafeCorporateSweepModule {
     error UnderlyingMismatch();
     error ModuleNotEnabled();
     error SafeCallReverted();
+    error NoPendingJitIntent();
+    error JitIntentExpired();
+    error JitIntentAmountMismatch();
+    error RelayerCooldownActive();
+    error SweepCapExceeded();
+    error JitCapExceeded();
+    error InsufficientPostWithdrawBalance();
 
     // ---------------------------------------------------------------------
     // Admin (Safe-only)
@@ -56,6 +69,18 @@ interface ISafeCorporateSweepModule {
 
     /// @notice Authorizes (or revokes) an automation relayer for `executeSweep` / `jitWithdraw`.
     function setRelayer(address _relayer, bool _authorized) external;
+
+    /// @notice Sets a one-time relayer JIT intent that must be consumed before `deadline`.
+    /// @dev    Safe-only operation for binding relayer JIT calls to treasury intent.
+    function setJitIntent(uint256 _amount, uint256 _deadline) external;
+
+    /// @notice Sets guardrails for relayer-triggered automation calls.
+    /// @dev    Any max value set to 0 means "unlimited".
+    function setRelayerGuardrails(
+        uint256 _maxJitWithdrawPerCall,
+        uint256 _maxSweepPerCall,
+        uint256 _relayerCooldown
+    ) external;
 
     /// @notice Manually pushes `_amount` of underlying from the Safe into the yield target.
     function manualSupply(uint256 _amount) external;
@@ -99,6 +124,30 @@ interface ISafeCorporateSweepModule {
 
     /// @notice Returns true if `account` is permitted to call automation entrypoints.
     function isRelayer(address account) external view returns (bool);
+
+    /// @notice Max relayer-triggered JIT amount per call (0 means unlimited).
+    function maxJitWithdrawPerCall() external view returns (uint256);
+
+    /// @notice Max relayer-triggered sweep amount per call (0 means unlimited).
+    function maxSweepPerCall() external view returns (uint256);
+
+    /// @notice Minimum seconds between relayer-triggered automation calls.
+    function relayerCooldown() external view returns (uint256);
+
+    /// @notice Last timestamp when relayer-triggered automation ran.
+    function lastRelayerActionAt() external view returns (uint256);
+
+    /// @notice Current pending JIT intent nonce.
+    function jitIntentNonce() external view returns (uint256);
+
+    /// @notice Current pending JIT intent amount.
+    function jitIntentAmount() external view returns (uint256);
+
+    /// @notice Current pending JIT intent deadline.
+    function jitIntentDeadline() external view returns (uint256);
+
+    /// @notice Whether a relayer-consumable JIT intent is currently active.
+    function hasPendingJitIntent() external view returns (bool);
 
     /// @notice Returns the amount that would be supplied if `executeSweep` were called now.
     function previewSweepAmount() external view returns (uint256);
