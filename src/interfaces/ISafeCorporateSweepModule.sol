@@ -108,16 +108,16 @@ interface ISafeCorporateSweepModule {
     // ---------------------------------------------------------------------
 
     /// @notice Address of the Safe this module is bound to.
-    function safeAddress() external view returns (address);
+    function SAFE_ADDRESS() external view returns (address);
 
     /// @notice Underlying stablecoin (e.g. USDC).
-    function asset() external view returns (address);
+    function ASSET() external view returns (address);
 
     /// @notice Yield-bearing aToken (e.g. aUSDC).
-    function aToken() external view returns (address);
+    function A_TOKEN() external view returns (address);
 
     /// @notice Aave V3 Pool that custodies the supplied principal.
-    function yieldTarget() external view returns (address);
+    function YIELD_TARGET() external view returns (address);
 
     /// @notice Minimum idle balance to keep on the Safe.
     function operatingThreshold() external view returns (uint256);

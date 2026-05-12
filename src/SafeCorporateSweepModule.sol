@@ -32,7 +32,7 @@ import {ISafeCorporateSweepModule} from "./interfaces/ISafeCorporateSweepModule.
 ///
 ///         GAS NOTES
 ///         ---------
-///         * `safeAddress`, `asset`, `aToken`, `yieldTarget` are immutable.
+///         * `SAFE_ADDRESS`, `ASSET`, `A_TOKEN`, `YIELD_TARGET` are immutable.
 ///         * `operatingThreshold` is a single SLOAD per call.
 ///         * Custom errors avoid revert string costs.
 ///         * Allowance is reset to 0 after every supply to keep the Safe lean
@@ -43,13 +43,13 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     // -----------------------------------------------------------------
 
     /// @inheritdoc ISafeCorporateSweepModule
-    address public immutable safeAddress;
+    address public immutable SAFE_ADDRESS;
     /// @inheritdoc ISafeCorporateSweepModule
-    address public immutable asset;
+    address public immutable ASSET;
     /// @inheritdoc ISafeCorporateSweepModule
-    address public immutable aToken;
+    address public immutable A_TOKEN;
     /// @inheritdoc ISafeCorporateSweepModule
-    address public immutable yieldTarget;
+    address public immutable YIELD_TARGET;
 
     // -----------------------------------------------------------------
     // Mutable state
@@ -83,16 +83,24 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     ///      module via an owner-threshold-signed `execTransaction`, so this is
     ///      effectively the Safe's owners acting collectively.
     modifier onlySafe() {
-        if (msg.sender != safeAddress) revert NotSafe();
+        _onlySafe();
         _;
     }
 
     /// @dev Allows either the Safe (admin override) or any allow-listed relayer.
     modifier onlyRelayerOrSafe() {
-        if (msg.sender != safeAddress && !_relayers[msg.sender]) {
+        _onlyRelayerOrSafe();
+        _;
+    }
+
+    function _onlySafe() internal view {
+        if (msg.sender != SAFE_ADDRESS) revert NotSafe();
+    }
+
+    function _onlyRelayerOrSafe() internal view {
+        if (msg.sender != SAFE_ADDRESS && !_relayers[msg.sender]) {
             revert NotAuthorizedRelayer();
         }
-        _;
     }
 
     // -----------------------------------------------------------------
@@ -123,10 +131,10 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
             revert UnderlyingMismatch();
         }
 
-        safeAddress = _safe;
-        asset = _asset;
-        aToken = _aToken;
-        yieldTarget = _yieldTarget;
+        SAFE_ADDRESS = _safe;
+        ASSET = _asset;
+        A_TOKEN = _aToken;
+        YIELD_TARGET = _yieldTarget;
         operatingThreshold = _initialThreshold;
 
         emit ThresholdUpdated(0, _initialThreshold);
@@ -205,7 +213,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     /// @inheritdoc ISafeCorporateSweepModule
     function executeSweep() external onlyRelayerOrSafe nonReentrant returns (uint256 supplied) {
         uint256 threshold = operatingThreshold;
-        uint256 balance = IERC20(asset).balanceOf(safeAddress);
+        uint256 balance = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         if (balance <= threshold) revert NoSweepRequired();
 
         unchecked {
@@ -213,7 +221,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
             supplied = balance - threshold;
         }
 
-        bool relayerCall = msg.sender != safeAddress;
+        bool relayerCall = msg.sender != SAFE_ADDRESS;
         if (relayerCall) {
             _enforceRelayerGuardrails(supplied, true);
         }
@@ -222,7 +230,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
 
         if (relayerCall) _markRelayerAction();
 
-        emit Swept(msg.sender, supplied, IERC20(asset).balanceOf(safeAddress));
+        emit Swept(msg.sender, supplied, IERC20(ASSET).balanceOf(SAFE_ADDRESS));
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
@@ -234,7 +242,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     {
         if (_txAmount == 0) revert ZeroAmount();
 
-        uint256 balance = IERC20(asset).balanceOf(safeAddress);
+        uint256 balance = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         if (balance >= _txAmount) revert NoShortfall();
 
         unchecked {
@@ -242,7 +250,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
             shortfall = _txAmount - balance;
         }
 
-        bool relayerCall = msg.sender != safeAddress;
+        bool relayerCall = msg.sender != SAFE_ADDRESS;
         if (relayerCall) {
             _enforcePendingJitIntent(_txAmount);
             _enforceRelayerGuardrails(shortfall, false);
@@ -250,7 +258,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
 
         uint256 beforeWithdraw = balance;
         _withdrawFromAave(shortfall);
-        uint256 afterWithdraw = IERC20(asset).balanceOf(safeAddress);
+        uint256 afterWithdraw = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         if (afterWithdraw < _txAmount) revert InsufficientPostWithdrawBalance();
 
         if (relayerCall) {
@@ -293,14 +301,14 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
 
     /// @inheritdoc ISafeCorporateSweepModule
     function previewSweepAmount() external view returns (uint256) {
-        uint256 balance = IERC20(asset).balanceOf(safeAddress);
+        uint256 balance = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         uint256 threshold = operatingThreshold;
         return balance > threshold ? balance - threshold : 0;
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
     function previewShortfall(uint256 _txAmount) external view returns (uint256) {
-        uint256 balance = IERC20(asset).balanceOf(safeAddress);
+        uint256 balance = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         return _txAmount > balance ? _txAmount - balance : 0;
     }
 
@@ -319,15 +327,15 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     ///      no residual approval is left on the Safe.
     function _supplyToAave(uint256 amount) internal {
         _execFromModule(
-            asset,
+            ASSET,
             0,
-            abi.encodeCall(IERC20.approve, (yieldTarget, amount))
+            abi.encodeCall(IERC20.approve, (YIELD_TARGET, amount))
         );
 
         _execFromModule(
-            yieldTarget,
+            YIELD_TARGET,
             0,
-            abi.encodeCall(IAaveV3Pool.supply, (asset, amount, safeAddress, 0))
+            abi.encodeCall(IAaveV3Pool.supply, (ASSET, amount, SAFE_ADDRESS, 0))
         );
     }
 
@@ -336,16 +344,16 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     ///      aToken holder.
     function _withdrawFromAave(uint256 amount) internal {
         _execFromModule(
-            yieldTarget,
+            YIELD_TARGET,
             0,
-            abi.encodeCall(IAaveV3Pool.withdraw, (asset, amount, safeAddress))
+            abi.encodeCall(IAaveV3Pool.withdraw, (ASSET, amount, SAFE_ADDRESS))
         );
     }
 
     /// @dev Tightly-typed wrapper around `execTransactionFromModule`. Always uses
     ///      `Enum.Operation.Call`; this module never delegatecalls through the Safe.
     function _execFromModule(address to, uint256 value, bytes memory data) internal {
-        bool success = ISafe(safeAddress).execTransactionFromModule(to, value, data, Enum.Operation.Call);
+        bool success = ISafe(SAFE_ADDRESS).execTransactionFromModule(to, value, data, Enum.Operation.Call);
         if (!success) revert SafeCallReverted();
     }
 

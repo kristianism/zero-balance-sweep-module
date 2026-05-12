@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Enum, ISafe} from "../../src/interfaces/ISafe.sol";
+import {Enum} from "../../src/interfaces/ISafe.sol";
 
 /// @title  MockSafe
 /// @notice Minimal stand-in for a Gnosis Safe used in fork tests.

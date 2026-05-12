@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test, console2} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {SafeCorporateSweepModule} from "../src/SafeCorporateSweepModule.sol";
 import {ISafeCorporateSweepModule} from "../src/interfaces/ISafeCorporateSweepModule.sol";
-import {IAaveV3Pool, IAToken} from "../src/interfaces/IAaveV3Pool.sol";
+import {IAToken} from "../src/interfaces/IAaveV3Pool.sol";
 
 import {MockSafe} from "./mocks/MockSafe.sol";
 
@@ -70,10 +70,10 @@ contract SafeCorporateSweepModuleTest is Test {
     // -----------------------------------------------------------------
 
     function test_Wiring_Immutables() public view {
-        assertEq(module.safeAddress(), address(safe), "safe");
-        assertEq(module.asset(), USDC, "asset");
-        assertEq(module.aToken(), AUSDC_V3, "aToken");
-        assertEq(module.yieldTarget(), AAVE_POOL, "pool");
+        assertEq(module.SAFE_ADDRESS(), address(safe), "safe");
+        assertEq(module.ASSET(), USDC, "asset");
+        assertEq(module.A_TOKEN(), AUSDC_V3, "aToken");
+        assertEq(module.YIELD_TARGET(), AAVE_POOL, "pool");
         assertEq(module.operatingThreshold(), THRESHOLD, "threshold");
         assertTrue(module.isRelayer(relayer), "relayer authorized");
         assertTrue(safe.isModuleEnabled(address(module)), "module enabled");
