@@ -16,15 +16,16 @@ import {SafeCorporateSweepModule} from "../src/SafeCorporateSweepModule.sol";
 ///             ATOKEN               — Aave V3 aToken (e.g. aUSDC).
 ///             AAVE_POOL            — Aave V3 Pool address.
 ///             OPERATING_THRESHOLD  — minimum idle balance (in token decimals).
-///             RELAYER              — initial automation relayer (or 0x0 to skip).
+///             RELAYER              — initial automation relayer. Prefer 0x0,
+///                                    then configure guardrails before authorization.
 contract Deploy is Script {
     function run() external returns (SafeCorporateSweepModule module) {
-        address safe          = vm.envAddress("SAFE_ADDRESS");
-        address asset         = vm.envAddress("ASSET");
-        address aToken        = vm.envAddress("ATOKEN");
-        address aavePool      = vm.envAddress("AAVE_POOL");
-        uint256 threshold     = vm.envUint("OPERATING_THRESHOLD");
-        address relayer       = vm.envOr("RELAYER", address(0));
+        address safe = vm.envAddress("SAFE_ADDRESS");
+        address asset = vm.envAddress("ASSET");
+        address aToken = vm.envAddress("ATOKEN");
+        address aavePool = vm.envAddress("AAVE_POOL");
+        uint256 threshold = vm.envUint("OPERATING_THRESHOLD");
+        address relayer = vm.envOr("RELAYER", address(0));
 
         vm.startBroadcast();
         module = new SafeCorporateSweepModule(safe, asset, aToken, aavePool, threshold, relayer);
@@ -32,5 +33,8 @@ contract Deploy is Script {
 
         console2.log("SafeCorporateSweepModule deployed at:", address(module));
         console2.log("Next step: have the Safe call enableModule(", address(module), ")");
+        if (relayer == address(0)) {
+            console2.log("Then configure finite guardrails before authorizing a relayer.");
+        }
     }
 }

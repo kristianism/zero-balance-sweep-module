@@ -13,9 +13,9 @@ library Enum {
 
 /// @title  ISafe
 /// @notice Minimal Gnosis Safe surface required by the Zero-Balance Sweep Module.
-/// @dev    The Safe is the asset custodian. The module never holds funds; it
-///         routes every state-changing call through `execTransactionFromModule`
-///         so the Safe remains the `msg.sender` against ERC-20s and Aave.
+/// @dev    The Safe is the asset custodian. Normal treasury operations route
+///         through `execTransactionFromModule` so the Safe remains the
+///         `msg.sender` against ERC-20s and Aave.
 interface ISafe {
     /// @notice Executes a transaction from a previously enabled module.
     /// @param  to        Destination contract.
