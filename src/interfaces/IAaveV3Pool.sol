@@ -25,6 +25,9 @@ interface IAaveV3Pool {
 /// @title  IAToken
 /// @notice Minimal aToken surface used to validate constructor wiring.
 interface IAToken {
+    /// @notice Aave V3 Pool that controls this aToken reserve.
+    function POOL() external view returns (address);
+
     /// @notice Returns the underlying asset address backing this aToken.
     function UNDERLYING_ASSET_ADDRESS() external view returns (address);
 

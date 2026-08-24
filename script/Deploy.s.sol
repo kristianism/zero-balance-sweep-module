@@ -19,12 +19,12 @@ import {SafeCorporateSweepModule} from "../src/SafeCorporateSweepModule.sol";
 ///             RELAYER              — initial automation relayer (or 0x0 to skip).
 contract Deploy is Script {
     function run() external returns (SafeCorporateSweepModule module) {
-        address safe          = vm.envAddress("SAFE_ADDRESS");
-        address asset         = vm.envAddress("ASSET");
-        address aToken        = vm.envAddress("ATOKEN");
-        address aavePool      = vm.envAddress("AAVE_POOL");
-        uint256 threshold     = vm.envUint("OPERATING_THRESHOLD");
-        address relayer       = vm.envOr("RELAYER", address(0));
+        address safe = vm.envAddress("SAFE_ADDRESS");
+        address asset = vm.envAddress("ASSET");
+        address aToken = vm.envAddress("ATOKEN");
+        address aavePool = vm.envAddress("AAVE_POOL");
+        uint256 threshold = vm.envUint("OPERATING_THRESHOLD");
+        address relayer = vm.envOr("RELAYER", address(0));
 
         vm.startBroadcast();
         module = new SafeCorporateSweepModule(safe, asset, aToken, aavePool, threshold, relayer);

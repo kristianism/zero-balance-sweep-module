@@ -121,14 +121,28 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         uint256 _initialThreshold,
         address _initialRelayer
     ) {
-        if (_safe == address(0) || _asset == address(0) || _aToken == address(0) || _yieldTarget == address(0)) {
+        if (
+            _safe == address(0) || _asset == address(0) || _aToken == address(0) || _yieldTarget == address(0)
+        ) {
             revert ZeroAddress();
+        }
+        if (
+            _safe.code.length == 0 || _asset.code.length == 0 || _aToken.code.length == 0
+                || _yieldTarget.code.length == 0
+        ) {
+            revert NotContract();
         }
         // Defensive: ensure the aToken's underlying actually matches `_asset`.
         // Mismatched wiring would silently succeed at deploy then drain the
         // Safe's allowance into the wrong reserve, so we fail closed.
         if (IAToken(_aToken).UNDERLYING_ASSET_ADDRESS() != _asset) {
             revert UnderlyingMismatch();
+        }
+        // Bind the aToken to the exact Aave pool used for supply and withdrawal.
+        // Checking only the underlying permits a deployment typo to publish the
+        // wrong receipt-token configuration for the Safe's Aave position.
+        if (IAToken(_aToken).POOL() != _yieldTarget) {
+            revert PoolMismatch();
         }
 
         SAFE_ADDRESS = _safe;
@@ -177,6 +191,15 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         _jitIntentActive = true;
 
         emit JitIntentSet(_jitIntentNonce, _amount, _deadline);
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function cancelJitIntent() external onlySafe {
+        if (_jitIntentActive) {
+            uint256 nonce = _jitIntentNonce;
+            _clearJitIntent();
+            emit JitIntentCancelled(nonce);
+        }
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
@@ -262,7 +285,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         if (afterWithdraw < _txAmount) revert InsufficientPostWithdrawBalance();
 
         if (relayerCall) {
-            _jitIntentActive = false;
+            _clearJitIntent();
             _markRelayerAction();
         }
 
@@ -326,28 +349,16 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     ///      either step reverts the whole module call reverts atomically and
     ///      no residual approval is left on the Safe.
     function _supplyToAave(uint256 amount) internal {
-        _execFromModule(
-            ASSET,
-            0,
-            abi.encodeCall(IERC20.approve, (YIELD_TARGET, amount))
-        );
+        _execFromModule(ASSET, 0, abi.encodeCall(IERC20.approve, (YIELD_TARGET, amount)));
 
-        _execFromModule(
-            YIELD_TARGET,
-            0,
-            abi.encodeCall(IAaveV3Pool.supply, (ASSET, amount, SAFE_ADDRESS, 0))
-        );
+        _execFromModule(YIELD_TARGET, 0, abi.encodeCall(IAaveV3Pool.supply, (ASSET, amount, SAFE_ADDRESS, 0)));
     }
 
     /// @dev Withdraws `amount` of underlying from Aave V3 back to the Safe.
     ///      `msg.sender` from Aave's perspective is the Safe, which is the
     ///      aToken holder.
     function _withdrawFromAave(uint256 amount) internal {
-        _execFromModule(
-            YIELD_TARGET,
-            0,
-            abi.encodeCall(IAaveV3Pool.withdraw, (ASSET, amount, SAFE_ADDRESS))
-        );
+        _execFromModule(YIELD_TARGET, 0, abi.encodeCall(IAaveV3Pool.withdraw, (ASSET, amount, SAFE_ADDRESS)));
     }
 
     /// @dev Tightly-typed wrapper around `execTransactionFromModule`. Always uses
@@ -360,7 +371,9 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     function _enforceRelayerGuardrails(uint256 amount, bool isSweep) internal view {
         uint256 lastAction = lastRelayerActionAt;
         uint256 cooldown = relayerCooldown;
-        if (cooldown != 0 && block.timestamp < lastAction + cooldown) {
+        // Subtraction avoids `lastAction + cooldown` overflowing. `lastAction`
+        // is a past block timestamp, so it cannot be greater than `block.timestamp`.
+        if (cooldown != 0 && lastAction != 0 && block.timestamp - lastAction < cooldown) {
             revert RelayerCooldownActive();
         }
 
@@ -375,6 +388,12 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
 
     function _markRelayerAction() internal {
         lastRelayerActionAt = block.timestamp;
+    }
+
+    function _clearJitIntent() internal {
+        _jitIntentActive = false;
+        _jitIntentAmount = 0;
+        _jitIntentDeadline = 0;
     }
 
     function _enforcePendingJitIntent(uint256 txAmount) internal view {

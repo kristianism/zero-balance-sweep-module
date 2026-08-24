@@ -35,8 +35,13 @@ interface ISafeCorporateSweepModule {
     /// @notice Emitted when the Safe sets a relayer-consumable JIT intent.
     event JitIntentSet(uint256 indexed nonce, uint256 amount, uint256 deadline);
 
+    /// @notice Emitted when the Safe invalidates an unconsumed relayer JIT intent.
+    event JitIntentCancelled(uint256 indexed nonce);
+
     /// @notice Emitted when relayer guardrails are updated.
-    event RelayerGuardrailsUpdated(uint256 maxJitWithdrawPerCall, uint256 maxSweepPerCall, uint256 relayerCooldown);
+    event RelayerGuardrailsUpdated(
+        uint256 maxJitWithdrawPerCall, uint256 maxSweepPerCall, uint256 relayerCooldown
+    );
 
     // ---------------------------------------------------------------------
     // Errors
@@ -49,6 +54,8 @@ interface ISafeCorporateSweepModule {
     error NoSweepRequired();
     error NoShortfall();
     error UnderlyingMismatch();
+    error PoolMismatch();
+    error NotContract();
     error ModuleNotEnabled();
     error SafeCallReverted();
     error NoPendingJitIntent();
@@ -73,6 +80,10 @@ interface ISafeCorporateSweepModule {
     /// @notice Sets a one-time relayer JIT intent that must be consumed before `deadline`.
     /// @dev    Safe-only operation for binding relayer JIT calls to treasury intent.
     function setJitIntent(uint256 _amount, uint256 _deadline) external;
+
+    /// @notice Invalidates the current relayer-consumable JIT intent, if any.
+    /// @dev    Safe-only emergency control. It is safe to call when no intent is pending.
+    function cancelJitIntent() external;
 
     /// @notice Sets guardrails for relayer-triggered automation calls.
     /// @dev    Any max value set to 0 means "unlimited".

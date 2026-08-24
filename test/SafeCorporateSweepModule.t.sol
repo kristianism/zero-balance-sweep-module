@@ -19,19 +19,19 @@ import {MockSafe} from "./mocks/MockSafe.sol";
 ///             forge test --fork-url $MAINNET_RPC_URL -vv
 contract SafeCorporateSweepModuleTest is Test {
     // ---- Mainnet addresses ------------------------------------------------
-    address internal constant USDC      = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
-    address internal constant AUSDC_V3  = 0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c;
+    address internal constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address internal constant AUSDC_V3 = 0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c;
     address internal constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
 
     // ---- Test fixtures ----------------------------------------------------
     MockSafe internal safe;
     SafeCorporateSweepModule internal module;
 
-    address internal relayer  = makeAddr("gelato-relayer");
+    address internal relayer = makeAddr("gelato-relayer");
     address internal stranger = makeAddr("stranger");
 
-    uint256 internal constant THRESHOLD     = 50_000e6;   // 50k USDC operating buffer
-    uint256 internal constant SAFE_FUNDING  = 200_000e6;  // 200k USDC seeded into the Safe
+    uint256 internal constant THRESHOLD = 50_000e6; // 50k USDC operating buffer
+    uint256 internal constant SAFE_FUNDING = 200_000e6; // 200k USDC seeded into the Safe
 
     function setUp() public {
         // If `--fork-url` wasn't passed but `MAINNET_RPC_URL` is set, spin up
@@ -50,12 +50,12 @@ contract SafeCorporateSweepModuleTest is Test {
         safe = new MockSafe();
 
         module = new SafeCorporateSweepModule({
-            _safe:             address(safe),
-            _asset:            USDC,
-            _aToken:           AUSDC_V3,
-            _yieldTarget:      AAVE_POOL,
+            _safe: address(safe),
+            _asset: USDC,
+            _aToken: AUSDC_V3,
+            _yieldTarget: AAVE_POOL,
             _initialThreshold: THRESHOLD,
-            _initialRelayer:   relayer
+            _initialRelayer: relayer
         });
 
         safe.enableModule(address(module));
@@ -135,15 +135,14 @@ contract SafeCorporateSweepModuleTest is Test {
         assertEq(IERC20(USDC).balanceOf(address(safe)), THRESHOLD);
 
         // The treasurer wants to send 80k USDC; the Safe only has 50k idle.
-        uint256 outgoingTx   = 80_000e6;
+        uint256 outgoingTx = 80_000e6;
         uint256 expectedPull = outgoingTx - THRESHOLD;
-
-        vm.expectEmit(true, false, false, true, address(module));
-        emit ISafeCorporateSweepModule.JitWithdrawn(relayer, expectedPull, outgoingTx);
 
         vm.prank(address(safe));
         module.setJitIntent(outgoingTx, block.timestamp + 1 hours);
 
+        vm.expectEmit(true, false, false, true, address(module));
+        emit ISafeCorporateSweepModule.JitWithdrawn(relayer, expectedPull, outgoingTx);
         vm.prank(relayer);
         uint256 pulled = module.jitWithdraw(outgoingTx);
 
@@ -259,6 +258,9 @@ contract SafeCorporateSweepModuleTest is Test {
         vm.prank(relayer);
         module.executeSweep();
 
+        // Reseed so execution reaches the relayer guardrail before the
+        // no-sweep-required precondition.
+        deal(USDC, address(safe), SAFE_FUNDING);
         vm.prank(relayer);
         vm.expectRevert(ISafeCorporateSweepModule.RelayerCooldownActive.selector);
         module.executeSweep();
@@ -277,7 +279,7 @@ contract SafeCorporateSweepModuleTest is Test {
         assertEq(supplied, sweepable);
 
         uint256 outgoingTx = 75_000e6;
-        uint256 shortfall  = module.previewShortfall(outgoingTx);
+        uint256 shortfall = module.previewShortfall(outgoingTx);
         assertEq(shortfall, outgoingTx - THRESHOLD);
     }
 }
