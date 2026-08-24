@@ -3,9 +3,9 @@ pragma solidity ^0.8.24;
 
 /// @title  ISafeCorporateSweepModule
 /// @notice External surface of the Zero-Balance Corporate Sweep Module.
-/// @dev    The module is a Zodiac-style Safe Module: it never custodies funds.
-///         All ERC-20 / Aave interactions execute through `execTransactionFromModule`
+/// @dev    Normal treasury flows execute through `execTransactionFromModule`
 ///         on the attached Safe so the Safe remains the on-chain owner of record.
+///         Safe-only recovery functions return assets sent directly to the module.
 interface ISafeCorporateSweepModule {
     // ---------------------------------------------------------------------
     // Events
@@ -24,7 +24,14 @@ interface ISafeCorporateSweepModule {
     event ManualSupplied(uint256 amount);
 
     /// @notice Emitted when the Safe manually pulls funds out of the yield target.
+    /// @param amount Actual underlying returned to the Safe.
     event ManualWithdrawn(uint256 amount);
+
+    /// @notice Emitted when the Safe recovers an ERC-20 sent directly to the module.
+    event TokenRecovered(address indexed token, uint256 amount);
+
+    /// @notice Emitted when the Safe recovers native currency forced into the module.
+    event NativeRecovered(uint256 amount);
 
     /// @notice Emitted when JIT funding tops up the Safe ahead of an outgoing transaction.
     /// @param  caller     Address that triggered the JIT pull.
@@ -65,13 +72,15 @@ interface ISafeCorporateSweepModule {
     error SweepCapExceeded();
     error JitCapExceeded();
     error InsufficientPostWithdrawBalance();
+    error NativeRecoveryFailed();
 
     // ---------------------------------------------------------------------
     // Admin (Safe-only)
     // ---------------------------------------------------------------------
 
-    /// @notice Updates the minimum USDC balance the Safe should retain at all times.
-    /// @dev    Callable only by the Safe (i.e. via owner-signed Safe transaction).
+    /// @notice Updates the minimum asset balance retained by automated sweeps.
+    /// @dev    Callable only by the Safe, including owner-authorized transactions
+    ///         and calls initiated through another enabled Safe module.
     function setThreshold(uint256 _amount) external;
 
     /// @notice Authorizes (or revokes) an automation relayer for `executeSweep` / `jitWithdraw`.
@@ -100,6 +109,12 @@ interface ISafeCorporateSweepModule {
     /// @dev    Pass `type(uint256).max` to withdraw the full aToken balance.
     function manualWithdraw(uint256 _amount) external;
 
+    /// @notice Recovers an ERC-20 sent directly to the module and returns it to the Safe.
+    function recoverToken(address _token, uint256 _amount) external;
+
+    /// @notice Recovers native currency forced into the module and returns it to the Safe.
+    function recoverNative() external;
+
     // ---------------------------------------------------------------------
     // Automation (relayer or Safe)
     // ---------------------------------------------------------------------
@@ -109,8 +124,8 @@ interface ISafeCorporateSweepModule {
     function executeSweep() external returns (uint256 supplied);
 
     /// @notice Tops the Safe up to `_txAmount` of underlying by withdrawing the
-    ///         exact shortfall from Aave V3. Designed to be batched immediately
-    ///         before the outgoing Safe transaction in the same execution flow.
+    ///         exact shortfall from Aave V3. A Safe call can batch this with the
+    ///         outgoing payment; a relayer call only performs the top-up.
     /// @return shortfall The amount actually withdrawn from Aave.
     function jitWithdraw(uint256 _txAmount) external returns (uint256 shortfall);
 

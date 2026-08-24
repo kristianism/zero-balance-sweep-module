@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {Enum, ISafe} from "./interfaces/ISafe.sol";
@@ -17,12 +18,12 @@ import {ISafeCorporateSweepModule} from "./interfaces/ISafeCorporateSweepModule.
 ///
 /// @dev    SECURITY MODEL
 ///         --------------
-///         * The module is non-custodial: it never holds underlying or aTokens.
-///           All state-changing calls execute through `execTransactionFromModule`
-///           on the Safe so the Safe is the on-chain owner of every position.
+///         * Normal treasury flows execute through `execTransactionFromModule`
+///           on the Safe, which remains the owner of every Aave position.
+///           Safe-only recovery functions return assets sent to the module by mistake.
 ///         * Admin functions (`setThreshold`, `setRelayer`, `manualSupply`,
-///           `manualWithdraw`) are gated by `onlySafe` — only a Safe-owner-signed
-///           transaction can hit them.
+///           `manualWithdraw`) are gated by `onlySafe`. Safe owners and any other
+///           enabled Safe module can make the Safe call these functions.
 ///         * Automation entrypoints (`executeSweep`, `jitWithdraw`) are gated
 ///           by an authorized-relayer allowlist; the Safe itself is implicitly
 ///           authorized.
@@ -35,9 +36,11 @@ import {ISafeCorporateSweepModule} from "./interfaces/ISafeCorporateSweepModule.
 ///         * `SAFE_ADDRESS`, `ASSET`, `A_TOKEN`, `YIELD_TARGET` are immutable.
 ///         * `operatingThreshold` is a single SLOAD per call.
 ///         * Custom errors avoid revert string costs.
-///         * Allowance is reset to 0 after every supply to keep the Safe lean
-///           and to support strict-allowance underlyings (USDT-style) in forks.
+///         * A non-zero pre-existing Pool allowance is cleared before each supply.
+///           Aave then consumes the exact newly approved amount.
 contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     // -----------------------------------------------------------------
     // Immutable wiring
     // -----------------------------------------------------------------
@@ -79,9 +82,8 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     // Modifiers
     // -----------------------------------------------------------------
 
-    /// @dev Restricts caller to the Safe itself. The Safe can only invoke this
-    ///      module via an owner-threshold-signed `execTransaction`, so this is
-    ///      effectively the Safe's owners acting collectively.
+    /// @dev Restricts caller to the Safe itself. This includes owner-authorized
+    ///      Safe transactions and calls initiated by another enabled Safe module.
     modifier onlySafe() {
         _onlySafe();
         _;
@@ -132,9 +134,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         ) {
             revert NotContract();
         }
-        // Defensive: ensure the aToken's underlying actually matches `_asset`.
-        // Mismatched wiring would silently succeed at deploy then drain the
-        // Safe's allowance into the wrong reserve, so we fail closed.
+        // Defensive: ensure the published aToken configuration matches `_asset`.
         if (IAToken(_aToken).UNDERLYING_ASSET_ADDRESS() != _asset) {
             revert UnderlyingMismatch();
         }
@@ -225,8 +225,30 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     /// @inheritdoc ISafeCorporateSweepModule
     function manualWithdraw(uint256 _amount) external onlySafe nonReentrant {
         if (_amount == 0) revert ZeroAmount();
+
+        uint256 balanceBefore = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         _withdrawFromAave(_amount);
-        emit ManualWithdrawn(_amount);
+        uint256 actualWithdrawn = IERC20(ASSET).balanceOf(SAFE_ADDRESS) - balanceBefore;
+        emit ManualWithdrawn(actualWithdrawn);
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function recoverToken(address _token, uint256 _amount) external onlySafe nonReentrant {
+        if (_token == address(0)) revert ZeroAddress();
+        if (_amount == 0) revert ZeroAmount();
+
+        IERC20(_token).safeTransfer(SAFE_ADDRESS, _amount);
+        emit TokenRecovered(_token, _amount);
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function recoverNative() external onlySafe nonReentrant {
+        uint256 amount = address(this).balance;
+        if (amount == 0) revert ZeroAmount();
+
+        (bool success,) = payable(SAFE_ADDRESS).call{value: amount}("");
+        if (!success) revert NativeRecoveryFailed();
+        emit NativeRecovered(amount);
     }
 
     // -----------------------------------------------------------------
@@ -343,12 +365,13 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     ///      `onBehalfOf` recipient of aTokens. The Safe — not the module —
     ///      owns the position end-to-end.
     ///
-    ///      Allowance hygiene: Aave V3's `supply` calls `safeTransferFrom` for
-    ///      exactly `amount`, fully consuming the allowance set below. We
-    ///      therefore skip a defensive approve(0) follow-up to save gas; if
-    ///      either step reverts the whole module call reverts atomically and
-    ///      no residual approval is left on the Safe.
+    ///      Allowance hygiene: clear a pre-existing non-zero Pool allowance for
+    ///      strict-approval tokens, then approve exactly `amount`. Aave V3's
+    ///      `supply` consumes that allowance. Any failure reverts atomically.
     function _supplyToAave(uint256 amount) internal {
+        if (IERC20(ASSET).allowance(SAFE_ADDRESS, YIELD_TARGET) != 0) {
+            _execFromModule(ASSET, 0, abi.encodeCall(IERC20.approve, (YIELD_TARGET, 0)));
+        }
         _execFromModule(ASSET, 0, abi.encodeCall(IERC20.approve, (YIELD_TARGET, amount)));
 
         _execFromModule(YIELD_TARGET, 0, abi.encodeCall(IAaveV3Pool.supply, (ASSET, amount, SAFE_ADDRESS, 0)));

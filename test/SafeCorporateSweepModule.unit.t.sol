@@ -6,7 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {SafeCorporateSweepModule} from "../src/SafeCorporateSweepModule.sol";
 import {ISafeCorporateSweepModule} from "../src/interfaces/ISafeCorporateSweepModule.sol";
 import {MockSafe} from "./mocks/MockSafe.sol";
-import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockERC20, MockStrictApprovalERC20} from "./mocks/MockERC20.sol";
 import {MockAaveV3Pool, MockAToken} from "./mocks/MockAaveV3Pool.sol";
 
 contract SafeCorporateSweepModuleUnitTest is Test {
@@ -79,6 +79,72 @@ contract SafeCorporateSweepModuleUnitTest is Test {
         module.executeSweep();
 
         assertEq(asset.balanceOf(address(safe)), THRESHOLD);
+    }
+
+    function test_SweepResetsPreExistingAllowanceForStrictApprovalToken() public {
+        MockSafe localSafe = new MockSafe();
+        MockStrictApprovalERC20 strictAsset = new MockStrictApprovalERC20();
+        MockAaveV3Pool localPool = new MockAaveV3Pool(address(strictAsset));
+        SafeCorporateSweepModule localModule = new SafeCorporateSweepModule(
+            address(localSafe),
+            address(strictAsset),
+            address(localPool.aToken()),
+            address(localPool),
+            THRESHOLD,
+            relayer
+        );
+        localSafe.enableModule(address(localModule));
+        strictAsset.mint(address(localSafe), FUNDING);
+
+        vm.prank(address(localSafe));
+        strictAsset.approve(address(localPool), 1);
+
+        vm.prank(relayer);
+        localModule.executeSweep();
+
+        assertEq(strictAsset.balanceOf(address(localSafe)), THRESHOLD);
+        assertEq(strictAsset.allowance(address(localSafe), address(localPool)), 0);
+    }
+
+    function test_ManualFullWithdrawEmitsActualAmount() public {
+        vm.prank(relayer);
+        module.executeSweep();
+        uint256 expectedWithdrawn = aToken.balanceOf(address(safe));
+
+        vm.expectEmit(false, false, false, true, address(module));
+        emit ISafeCorporateSweepModule.ManualWithdrawn(expectedWithdrawn);
+        vm.prank(address(safe));
+        module.manualWithdraw(type(uint256).max);
+
+        assertEq(asset.balanceOf(address(safe)), FUNDING);
+        assertEq(aToken.balanceOf(address(safe)), 0);
+    }
+
+    function test_SafeCanRecoverTokensSentDirectlyToModule() public {
+        uint256 amount = 123e6;
+        asset.mint(address(module), amount);
+
+        vm.expectEmit(true, false, false, true, address(module));
+        emit ISafeCorporateSweepModule.TokenRecovered(address(asset), amount);
+        vm.prank(address(safe));
+        module.recoverToken(address(asset), amount);
+
+        assertEq(asset.balanceOf(address(module)), 0);
+        assertEq(asset.balanceOf(address(safe)), FUNDING + amount);
+    }
+
+    function test_SafeCanRecoverForcedNativeCurrency() public {
+        uint256 amount = 1 ether;
+        uint256 safeBalanceBefore = address(safe).balance;
+        vm.deal(address(module), amount);
+
+        vm.expectEmit(false, false, false, true, address(module));
+        emit ISafeCorporateSweepModule.NativeRecovered(amount);
+        vm.prank(address(safe));
+        module.recoverNative();
+
+        assertEq(address(module).balance, 0);
+        assertEq(address(safe).balance, safeBalanceBefore + amount);
     }
 
     function testFuzz_ExecuteSweepPreservesThresholdAndConservesAssets(
