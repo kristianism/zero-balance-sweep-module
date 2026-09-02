@@ -6,7 +6,12 @@ import {Test} from "forge-std/Test.sol";
 import {SafeCorporateSweepModule} from "../src/SafeCorporateSweepModule.sol";
 import {ISafeCorporateSweepModule} from "../src/interfaces/ISafeCorporateSweepModule.sol";
 import {MockSafe} from "./mocks/MockSafe.sol";
-import {MockERC20, MockStrictApprovalERC20} from "./mocks/MockERC20.sol";
+import {
+    MockERC20,
+    MockFalseApprovalERC20,
+    MockNoReturnERC20,
+    MockStrictApprovalERC20
+} from "./mocks/MockERC20.sol";
 import {MockAaveV3Pool, MockAToken} from "./mocks/MockAaveV3Pool.sol";
 
 contract SafeCorporateSweepModuleUnitTest is Test {
@@ -40,6 +45,15 @@ contract SafeCorporateSweepModuleUnitTest is Test {
         vm.expectRevert(ISafeCorporateSweepModule.PoolMismatch.selector);
         new SafeCorporateSweepModule(
             address(safe), address(asset), address(aToken), address(otherPool), THRESHOLD, relayer
+        );
+    }
+
+    function test_ConstructorRejectsUnregisteredLookalikeAToken() public {
+        MockAToken lookalikeAToken = new MockAToken(address(asset), address(pool));
+
+        vm.expectRevert(ISafeCorporateSweepModule.PoolMismatch.selector);
+        new SafeCorporateSweepModule(
+            address(safe), address(asset), address(lookalikeAToken), address(pool), THRESHOLD, relayer
         );
     }
 
@@ -104,6 +118,132 @@ contract SafeCorporateSweepModuleUnitTest is Test {
 
         assertEq(strictAsset.balanceOf(address(localSafe)), THRESHOLD);
         assertEq(strictAsset.allowance(address(localSafe), address(localPool)), 0);
+    }
+
+    function test_SweepSupportsNoReturnApprovalToken() public {
+        MockSafe localSafe = new MockSafe();
+        MockNoReturnERC20 noReturnAsset = new MockNoReturnERC20();
+        MockAaveV3Pool localPool = new MockAaveV3Pool(address(noReturnAsset));
+        SafeCorporateSweepModule localModule = new SafeCorporateSweepModule(
+            address(localSafe),
+            address(noReturnAsset),
+            address(localPool.aToken()),
+            address(localPool),
+            THRESHOLD,
+            relayer
+        );
+        localSafe.enableModule(address(localModule));
+        noReturnAsset.mint(address(localSafe), FUNDING);
+
+        vm.prank(relayer);
+        assertEq(localModule.executeSweep(), FUNDING - THRESHOLD);
+
+        assertEq(noReturnAsset.balanceOf(address(localSafe)), THRESHOLD);
+        assertEq(localPool.aToken().balanceOf(address(localSafe)), FUNDING - THRESHOLD);
+    }
+
+    function test_SweepRejectsFalseReturningApprovalToken() public {
+        MockSafe localSafe = new MockSafe();
+        MockFalseApprovalERC20 falseReturnAsset = new MockFalseApprovalERC20();
+        MockAaveV3Pool localPool = new MockAaveV3Pool(address(falseReturnAsset));
+        SafeCorporateSweepModule localModule = new SafeCorporateSweepModule(
+            address(localSafe),
+            address(falseReturnAsset),
+            address(localPool.aToken()),
+            address(localPool),
+            THRESHOLD,
+            relayer
+        );
+        localSafe.enableModule(address(localModule));
+        falseReturnAsset.mint(address(localSafe), FUNDING);
+        falseReturnAsset.seedAllowance(address(localSafe), address(localPool), type(uint256).max);
+
+        vm.prank(relayer);
+        vm.expectRevert(ISafeCorporateSweepModule.TokenCallFailed.selector);
+        localModule.executeSweep();
+
+        assertEq(falseReturnAsset.balanceOf(address(localSafe)), FUNDING);
+        assertEq(localPool.aToken().balanceOf(address(localSafe)), 0);
+    }
+
+    function test_RelayerSweepClipsToCapInsteadOfBrickingOnDonatedDust() public {
+        uint256 cap = FUNDING - THRESHOLD;
+        asset.mint(address(safe), 1);
+        vm.prank(address(safe));
+        module.setRelayerGuardrails(0, cap, 0);
+        assertEq(module.previewSweepAmount(), cap);
+
+        vm.prank(relayer);
+        uint256 supplied = module.executeSweep();
+
+        assertEq(supplied, cap);
+        assertEq(asset.balanceOf(address(safe)), THRESHOLD + 1);
+        assertEq(aToken.balanceOf(address(safe)), cap);
+    }
+
+    function test_JitFundedBalanceCannotBeResweptBeforeIntentDeadline() public {
+        uint256 txAmount = 80_000e6;
+        vm.prank(relayer);
+        module.executeSweep();
+
+        vm.prank(address(safe));
+        module.setJitIntent(txAmount, block.timestamp + 1 days);
+        vm.prank(relayer);
+        module.jitWithdraw(txAmount);
+
+        vm.prank(relayer);
+        vm.expectRevert(ISafeCorporateSweepModule.NoSweepRequired.selector);
+        module.executeSweep();
+
+        assertEq(asset.balanceOf(address(safe)), txAmount);
+        assertEq(module.reservedJitBalance(), txAmount);
+        assertTrue(module.hasActiveJitReservation());
+
+        asset.mint(address(safe), 1);
+        vm.prank(relayer);
+        assertEq(module.executeSweep(), 1);
+        assertEq(asset.balanceOf(address(safe)), txAmount);
+
+        vm.prank(address(safe));
+        vm.expectRevert(ISafeCorporateSweepModule.JitReservationActive.selector);
+        module.setJitIntent(txAmount + 1, block.timestamp + 2 days);
+    }
+
+    function test_JitReservationCanBeReleasedOrExpire() public {
+        uint256 txAmount = 80_000e6;
+        uint256 deadline = block.timestamp + 1 days;
+        vm.prank(relayer);
+        module.executeSweep();
+
+        vm.prank(address(safe));
+        module.setJitIntent(txAmount, deadline);
+        vm.prank(relayer);
+        module.jitWithdraw(txAmount);
+
+        vm.prank(address(safe));
+        module.cancelJitIntent();
+        assertFalse(module.hasActiveJitReservation());
+        assertEq(module.reservedJitBalance(), 0);
+
+        vm.prank(relayer);
+        assertEq(module.executeSweep(), txAmount - THRESHOLD);
+
+        vm.prank(address(safe));
+        module.setJitIntent(txAmount, deadline);
+        vm.prank(relayer);
+        module.jitWithdraw(txAmount);
+        vm.warp(deadline + 1);
+
+        assertFalse(module.hasActiveJitReservation());
+        assertEq(module.reservedJitBalance(), 0);
+        assertEq(module.jitReservationDeadline(), 0);
+
+        vm.prank(address(safe));
+        module.setJitIntent(txAmount + 1, block.timestamp + 1 days);
+        assertTrue(module.hasPendingJitIntent());
+
+        vm.prank(relayer);
+        assertEq(module.executeSweep(), txAmount - THRESHOLD);
     }
 
     function test_ManualFullWithdrawEmitsActualAmount() public {

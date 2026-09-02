@@ -39,5 +39,17 @@ contract MockSafe {
         (success,) = to.call{value: value}(data);
     }
 
+    function execTransactionFromModuleReturnData(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        Enum.Operation operation
+    ) external returns (bool success, bytes memory returnData) {
+        require(modules[msg.sender], "MockSafe: module not enabled");
+        require(operation == Enum.Operation.Call, "MockSafe: only Call supported");
+
+        (success, returnData) = to.call{value: value}(data);
+    }
+
     receive() external payable {}
 }

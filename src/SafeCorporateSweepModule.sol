@@ -78,6 +78,10 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     uint256 private _jitIntentDeadline;
     bool private _jitIntentActive;
 
+    uint256 private _reservedJitBalance;
+    uint256 private _jitReservationDeadline;
+    bool private _jitReservationActive;
+
     // -----------------------------------------------------------------
     // Modifiers
     // -----------------------------------------------------------------
@@ -144,6 +148,11 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         if (IAToken(_aToken).POOL() != _yieldTarget) {
             revert PoolMismatch();
         }
+        // The Pool is authoritative. A look-alike token can self-report the
+        // expected Pool and underlying while not being the registered reserve token.
+        if (IAaveV3Pool(_yieldTarget).getReserveData(_asset).aTokenAddress != _aToken) {
+            revert PoolMismatch();
+        }
 
         SAFE_ADDRESS = _safe;
         ASSET = _asset;
@@ -182,6 +191,10 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         if (_amount == 0) revert ZeroAmount();
         if (_deadline < block.timestamp) revert JitIntentExpired();
 
+        if (hasActiveJitReservation()) revert JitReservationActive();
+        // Clear expired storage without emitting a late release event.
+        _clearJitReservation();
+
         unchecked {
             // safe: monotonic uint256 counter for realistic module lifetime.
             _jitIntentNonce++;
@@ -200,6 +213,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
             _clearJitIntent();
             emit JitIntentCancelled(nonce);
         }
+        _clearJitReservation();
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
@@ -257,7 +271,7 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
 
     /// @inheritdoc ISafeCorporateSweepModule
     function executeSweep() external onlyRelayerOrSafe nonReentrant returns (uint256 supplied) {
-        uint256 threshold = operatingThreshold;
+        uint256 threshold = _minimumIdleBalance();
         uint256 balance = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
         if (balance <= threshold) revert NoSweepRequired();
 
@@ -268,6 +282,8 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
 
         bool relayerCall = msg.sender != SAFE_ADDRESS;
         if (relayerCall) {
+            uint256 cap = maxSweepPerCall;
+            if (cap != 0 && supplied > cap) supplied = cap;
             _enforceRelayerGuardrails(supplied, true);
         }
 
@@ -307,8 +323,14 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         if (afterWithdraw < _txAmount) revert InsufficientPostWithdrawBalance();
 
         if (relayerCall) {
+            uint256 nonce = _jitIntentNonce;
+            uint256 deadline = _jitIntentDeadline;
             _clearJitIntent();
+            _reservedJitBalance = _txAmount;
+            _jitReservationDeadline = deadline;
+            _jitReservationActive = true;
             _markRelayerAction();
+            emit JitBalanceReserved(nonce, _txAmount, deadline);
         }
 
         shortfall = afterWithdraw - beforeWithdraw;
@@ -345,10 +367,28 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
-    function previewSweepAmount() external view returns (uint256) {
+    function reservedJitBalance() public view returns (uint256) {
+        return hasActiveJitReservation() ? _reservedJitBalance : 0;
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function jitReservationDeadline() public view returns (uint256) {
+        return hasActiveJitReservation() ? _jitReservationDeadline : 0;
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function hasActiveJitReservation() public view returns (bool) {
+        return _jitReservationActive && block.timestamp <= _jitReservationDeadline;
+    }
+
+    /// @inheritdoc ISafeCorporateSweepModule
+    function previewSweepAmount() external view returns (uint256 supplied) {
         uint256 balance = IERC20(ASSET).balanceOf(SAFE_ADDRESS);
-        uint256 threshold = operatingThreshold;
-        return balance > threshold ? balance - threshold : 0;
+        uint256 threshold = _minimumIdleBalance();
+        supplied = balance > threshold ? balance - threshold : 0;
+
+        uint256 cap = maxSweepPerCall;
+        if (cap != 0 && supplied > cap) supplied = cap;
     }
 
     /// @inheritdoc ISafeCorporateSweepModule
@@ -370,9 +410,9 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     ///      `supply` consumes that allowance. Any failure reverts atomically.
     function _supplyToAave(uint256 amount) internal {
         if (IERC20(ASSET).allowance(SAFE_ADDRESS, YIELD_TARGET) != 0) {
-            _execFromModule(ASSET, 0, abi.encodeCall(IERC20.approve, (YIELD_TARGET, 0)));
+            _execTokenCallFromModule(abi.encodeCall(IERC20.approve, (YIELD_TARGET, 0)));
         }
-        _execFromModule(ASSET, 0, abi.encodeCall(IERC20.approve, (YIELD_TARGET, amount)));
+        _execTokenCallFromModule(abi.encodeCall(IERC20.approve, (YIELD_TARGET, amount)));
 
         _execFromModule(YIELD_TARGET, 0, abi.encodeCall(IAaveV3Pool.supply, (ASSET, amount, SAFE_ADDRESS, 0)));
     }
@@ -389,6 +429,17 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
     function _execFromModule(address to, uint256 value, bytes memory data) internal {
         bool success = ISafe(SAFE_ADDRESS).execTransactionFromModule(to, value, data, Enum.Operation.Call);
         if (!success) revert SafeCallReverted();
+    }
+
+    /// @dev Safe-routed token call that accepts no-return ERC-20s and requires
+    ///      an explicit true value when return data is present.
+    function _execTokenCallFromModule(bytes memory data) internal {
+        (bool success, bytes memory returnData) =
+            ISafe(SAFE_ADDRESS).execTransactionFromModuleReturnData(ASSET, 0, data, Enum.Operation.Call);
+        if (!success) revert SafeCallReverted();
+        if (returnData.length != 0) {
+            if (returnData.length != 32 || !abi.decode(returnData, (bool))) revert TokenCallFailed();
+        }
     }
 
     function _enforceRelayerGuardrails(uint256 amount, bool isSweep) internal view {
@@ -417,6 +468,23 @@ contract SafeCorporateSweepModule is ISafeCorporateSweepModule, ReentrancyGuard 
         _jitIntentActive = false;
         _jitIntentAmount = 0;
         _jitIntentDeadline = 0;
+    }
+
+    function _clearJitReservation() internal {
+        if (!_jitReservationActive) return;
+
+        bool wasEffective = block.timestamp <= _jitReservationDeadline;
+        _jitReservationActive = false;
+        _reservedJitBalance = 0;
+        _jitReservationDeadline = 0;
+        if (wasEffective) emit JitReservationCleared(_jitIntentNonce);
+    }
+
+    function _minimumIdleBalance() internal view returns (uint256 minimum) {
+        minimum = operatingThreshold;
+        if (hasActiveJitReservation() && _reservedJitBalance > minimum) {
+            minimum = _reservedJitBalance;
+        }
     }
 
     function _enforcePendingJitIntent(uint256 txAmount) internal view {

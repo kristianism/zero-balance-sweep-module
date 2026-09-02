@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IAaveV3Pool, IAToken} from "../../src/interfaces/IAaveV3Pool.sol";
 
@@ -32,6 +33,8 @@ contract MockAToken is IAToken {
 }
 
 contract MockAaveV3Pool is IAaveV3Pool {
+    using SafeERC20 for IERC20;
+
     IERC20 public immutable asset;
     MockAToken public immutable aToken;
 
@@ -42,7 +45,7 @@ contract MockAaveV3Pool is IAaveV3Pool {
 
     function supply(address suppliedAsset, uint256 amount, address onBehalfOf, uint16) external {
         require(suppliedAsset == address(asset), "asset");
-        require(asset.transferFrom(msg.sender, address(this), amount), "transferFrom");
+        asset.safeTransferFrom(msg.sender, address(this), amount);
         aToken.mint(onBehalfOf, amount);
     }
 
@@ -54,6 +57,11 @@ contract MockAaveV3Pool is IAaveV3Pool {
         uint256 balance = aToken.balanceOf(msg.sender);
         withdrawn = amount == type(uint256).max ? balance : amount;
         aToken.burn(msg.sender, withdrawn);
-        require(asset.transfer(to, withdrawn), "transfer");
+        asset.safeTransfer(to, withdrawn);
+    }
+
+    function getReserveData(address reserveAsset) external view returns (ReserveData memory reserve) {
+        require(reserveAsset == address(asset), "asset");
+        reserve.aTokenAddress = address(aToken);
     }
 }

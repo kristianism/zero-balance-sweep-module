@@ -16,10 +16,11 @@ Do not deploy it with production treasury funds without reviewing the exact Safe
 - Supplies aTokens directly to the Safe.
 - Withdraws an exact shortfall before a planned payment.
 - Requires a Safe-set, amount-bound, expiring intent before a relayer can execute a JIT withdrawal.
-- Supports per-call sweep and JIT caps plus a shared relayer cooldown.
-- Provides Safe-only manual supply, withdrawal, intent cancellation, configuration, and asset recovery functions.
-- Validates that the configured aToken matches both the asset and Aave Pool.
-- Clears a pre-existing Pool allowance before approval when required by strict-approval tokens.
+- Protects the relayer-funded balance from automated resweeping until the Safe releases it or the intent deadline expires.
+- Supports clipped per-call sweep caps, JIT caps, and a shared relayer cooldown.
+- Provides Safe-only manual supply, withdrawal, intent cancellation/reservation release, configuration, and asset recovery functions.
+- Validates the aToken's self-reported wiring and the Pool's authoritative reserve registration.
+- Clears a pre-existing Pool allowance when needed and rejects explicit false ERC-20 approval returns.
 
 ## Trust model
 
@@ -40,7 +41,7 @@ There are two execution patterns:
 1. **Safe-authorized batch:** The Safe calls `jitWithdraw` and then executes the outgoing payment in one owner-approved batch. No relayer intent is required because the Safe is the caller.
 2. **Relayer funding:** The Safe first creates a one-time intent with `setJitIntent`. An authorized relayer later calls `jitWithdraw` for that exact amount before the deadline. The resulting payment is a separate Safe transaction.
 
-The relayer path tops up the Safe. It does not intercept, approve, or execute the outgoing payment.
+The relayer path tops up the Safe. It does not intercept, approve, or execute the outgoing payment. After a relayer top-up, `executeSweep` preserves at least the intended payment amount until the Safe calls `cancelJitIntent()` to acknowledge/release it or the intent deadline expires. A new intent is rejected while that reservation remains active. A configured sweep cap clips each sweep to the cap instead of blocking the automation loop when the excess is slightly larger.
 
 ## Contract interface
 
@@ -67,6 +68,9 @@ The relayer path tops up the Safe. It does not intercept, approve, or execute th
 
 - `previewSweepAmount()`
 - `previewShortfall(uint256 transactionAmount)`
+- `reservedJitBalance()`
+- `jitReservationDeadline()`
+- `hasActiveJitReservation()`
 - Current wiring, thresholds, relayer guardrails, action timestamps, and JIT intent state
 
 ## Repository layout

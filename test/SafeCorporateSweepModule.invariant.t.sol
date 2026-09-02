@@ -44,6 +44,8 @@ contract SweepHandler is Test {
 
         uint256 target = bound(targetSeed, idleBalance + 1, initialFunding);
         vm.prank(address(safe));
+        module.cancelJitIntent();
+        vm.prank(address(safe));
         module.setJitIntent(target, block.timestamp + 1 days);
 
         vm.prank(relayer);

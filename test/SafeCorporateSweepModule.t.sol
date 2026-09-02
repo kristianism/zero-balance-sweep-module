@@ -102,9 +102,9 @@ contract SafeCorporateSweepModuleTest is Test {
         assertEq(supplied, expectedSupply, "supplied delta");
         assertEq(IERC20(USDC).balanceOf(address(safe)), THRESHOLD, "safe balance == threshold");
 
-        // aUSDC mints 1:1 at supply time. Allow ±1 wei rounding for index math.
+        // aUSDC's indexed balance can differ by a few base units from the supplied principal.
         uint256 aBal = IAToken(AUSDC_V3).balanceOf(address(safe));
-        assertApproxEqAbs(aBal, expectedSupply, 1, "aUSDC ~ supplied");
+        assertApproxEqAbs(aBal, expectedSupply, 10, "aUSDC ~ supplied");
 
         // Allowance should be left at zero post-sweep.
         assertEq(IERC20(USDC).allowance(address(safe), AAVE_POOL), 0, "allowance reset");
@@ -249,14 +249,9 @@ contract SafeCorporateSweepModuleTest is Test {
         module.setRelayerGuardrails(40_000e6, 120_000e6, 600); // 10 min cooldown
 
         vm.prank(relayer);
-        vm.expectRevert(ISafeCorporateSweepModule.SweepCapExceeded.selector);
-        module.executeSweep(); // default sweep is 150k
-
-        vm.prank(address(safe));
-        module.setRelayerGuardrails(40_000e6, 200_000e6, 600);
-
-        vm.prank(relayer);
-        module.executeSweep();
+        uint256 supplied = module.executeSweep(); // default excess is 150k; per-call cap is 120k
+        assertEq(supplied, 120_000e6);
+        assertEq(IERC20(USDC).balanceOf(address(safe)), 80_000e6);
 
         // Reseed so execution reaches the relayer guardrail before the
         // no-sweep-required precondition.

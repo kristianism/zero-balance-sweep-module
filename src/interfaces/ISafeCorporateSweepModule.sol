@@ -45,6 +45,12 @@ interface ISafeCorporateSweepModule {
     /// @notice Emitted when the Safe invalidates an unconsumed relayer JIT intent.
     event JitIntentCancelled(uint256 indexed nonce);
 
+    /// @notice Emitted when a relayer top-up is protected from automated resweeping.
+    event JitBalanceReserved(uint256 indexed nonce, uint256 balance, uint256 deadline);
+
+    /// @notice Emitted when the Safe releases a funded JIT balance reservation.
+    event JitReservationCleared(uint256 indexed nonce);
+
     /// @notice Emitted when relayer guardrails are updated.
     event RelayerGuardrailsUpdated(
         uint256 maxJitWithdrawPerCall, uint256 maxSweepPerCall, uint256 relayerCooldown
@@ -65,7 +71,9 @@ interface ISafeCorporateSweepModule {
     error NotContract();
     error ModuleNotEnabled();
     error SafeCallReverted();
+    error TokenCallFailed();
     error NoPendingJitIntent();
+    error JitReservationActive();
     error JitIntentExpired();
     error JitIntentAmountMismatch();
     error RelayerCooldownActive();
@@ -87,11 +95,11 @@ interface ISafeCorporateSweepModule {
     function setRelayer(address _relayer, bool _authorized) external;
 
     /// @notice Sets a one-time relayer JIT intent that must be consumed before `deadline`.
-    /// @dev    Safe-only operation for binding relayer JIT calls to treasury intent.
+    /// @dev    Safe-only. Reverts while a funded reservation is active; release it explicitly first.
     function setJitIntent(uint256 _amount, uint256 _deadline) external;
 
-    /// @notice Invalidates the current relayer-consumable JIT intent, if any.
-    /// @dev    Safe-only emergency control. It is safe to call when no intent is pending.
+    /// @notice Invalidates a pending intent and releases any funded reservation.
+    /// @dev    Safe-only emergency/acknowledgement control. Safe to call when neither exists.
     function cancelJitIntent() external;
 
     /// @notice Sets guardrails for relayer-triggered automation calls.
@@ -175,7 +183,16 @@ interface ISafeCorporateSweepModule {
     /// @notice Whether a relayer-consumable JIT intent is currently active.
     function hasPendingJitIntent() external view returns (bool);
 
-    /// @notice Returns the amount that would be supplied if `executeSweep` were called now.
+    /// @notice Minimum funded JIT balance protected from relayer sweeps.
+    function reservedJitBalance() external view returns (uint256);
+
+    /// @notice Deadline after which the funded JIT reservation stops applying.
+    function jitReservationDeadline() external view returns (uint256);
+
+    /// @notice Whether a funded JIT reservation is currently effective.
+    function hasActiveJitReservation() external view returns (bool);
+
+    /// @notice Returns the amount an authorized relayer would supply now after reservation and cap limits.
     function previewSweepAmount() external view returns (uint256);
 
     /// @notice Returns the amount that `jitWithdraw(_txAmount)` would pull from Aave.

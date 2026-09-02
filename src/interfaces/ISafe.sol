@@ -30,6 +30,15 @@ interface ISafe {
         Enum.Operation operation
     ) external returns (bool success);
 
+    /// @notice Executes a module transaction and returns the inner call data.
+    /// @dev    Required for validating optional ERC-20 boolean return values.
+    function execTransactionFromModuleReturnData(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        Enum.Operation operation
+    ) external returns (bool success, bytes memory returnData);
+
     /// @notice Returns whether `module` is currently enabled on the Safe.
     function isModuleEnabled(address module) external view returns (bool);
 

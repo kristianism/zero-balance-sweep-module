@@ -5,6 +5,20 @@ pragma solidity ^0.8.24;
 /// @notice Subset of the Aave V3 Pool surface used by the sweep module.
 /// @dev    Full ABI: https://github.com/aave-dao/aave-v3-origin
 interface IAaveV3Pool {
+    /// @dev Prefix of Aave V3's ReserveData tuple through `aTokenAddress`.
+    ///      Later tuple fields may vary between Pool revisions and are ignored.
+    struct ReserveData {
+        uint256 configuration;
+        uint128 liquidityIndex;
+        uint128 currentLiquidityRate;
+        uint128 variableBorrowIndex;
+        uint128 currentVariableBorrowRate;
+        uint128 deprecatedStableBorrowRate;
+        uint40 lastUpdateTimestamp;
+        uint16 id;
+        address aTokenAddress;
+    }
+
     /// @notice Supplies `amount` of `asset` into the reserve, minting an
     ///         equivalent amount of aTokens to `onBehalfOf`.
     /// @param  asset         Underlying ERC-20 (e.g. USDC).
@@ -20,6 +34,9 @@ interface IAaveV3Pool {
     /// @param  to      Recipient of the withdrawn underlying.
     /// @return The actual amount withdrawn (relevant when passing `max`).
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+
+    /// @notice Returns authoritative reserve configuration for `asset`.
+    function getReserveData(address asset) external view returns (ReserveData memory);
 }
 
 /// @title  IAToken
